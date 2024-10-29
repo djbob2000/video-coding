@@ -1,6 +1,10 @@
 # Specify paths to required tools
 $FfmpegDir = "c:\FFMpeg\bin"
 $AbAv1Dir = "c:\FFMpeg\ab-av1"
+
+# Add FFmpeg to PATH
+$env:Path = "$FfmpegDir;$env:Path"
+
 # Specify the folder with source files and output folder
 $InputDir = "c:\!Share\download-reduce-size-move-to-google\video\gnom-vera"
 $OutputDir = "c:\FFMpeg\output"
@@ -109,7 +113,10 @@ function Process-File {
         default { "yuv420p" }  # For SDR content, 8-bit is sufficient
     }
 
-    # Prepare ab-av1 parameters
+    # Базовые параметры x265
+    $baseX265Params = "ref=4:bframes=8:psy-rd=2.0:aq-mode=2:aq-strength=1.0:qcomp=0.7:rc-lookahead=60:ctu=64:tu-inter-depth=4:tu-intra-depth=4:limit-tu=3:sao=1:selective-sao=2:no-sao-non-deblock=1:no-early-skip=1:hist-scenecut=1:no-cutree=1"
+
+    # Базовые параметры ab-av1
     $abav1Args = @(
         "auto-encode",
         "-i", $file,
@@ -117,99 +124,40 @@ function Process-File {
         "--encoder", "libx265",
         "--preset", "veryslow",
         "--min-vmaf", "90",
-        "--enc-input", "pix_fmt=$pixFmt",
-        # Preserve metadata
-        "--enc-input", "map_metadata=1",
-        "--enc-input", "movflags=use_metadata_tags",
-        # Copy all audio streams
-        "--enc-input", "c:a=copy"
+        "--pix-format", $pixFmt
     )
 
-    # Add color space specific parameters
-    switch ($targetColorSpace) {
-        "bt601-625" {
+    # Добавляем цветовые параметры через --enc
+    $x265Params = switch ($targetColorSpace) {
+        "bt601-625" { 
             Write-Host "SD content (PAL) detected. Converting to BT.709."
-            $abav1Args += @(
-                "--enc-input", "vf=colorspace=all=bt709:iall=bt470bg:fast=1",
-                "--enc", "colorprim=bt709",
-                "--enc", "transfer=bt709",
-                "--enc", "colormatrix=bt709"
-            )
+            "--enc", "x265-params=$($colorParams):range=$($colorRange):min-keyint=$($minKeyint):keyint=$($keyint):$($baseX265Params)"
         }
-        "bt601-525" {
+        "bt601-525" { 
             Write-Host "SD content (NTSC) detected. Converting to BT.709."
-            $abav1Args += @(
-                "--enc-input", "vf=colorspace=all=bt709:iall=smpte170m:fast=1",
-                "--enc", "colorprim=bt709",
-                "--enc", "transfer=bt709",
-                "--enc", "colormatrix=bt709"
-            )
+            "--enc", "x265-params=$($colorParams):range=$($colorRange):min-keyint=$($minKeyint):keyint=$($keyint):$($baseX265Params)"
         }
-        "bt709" {
+        "bt709" { 
             Write-Host "HD content detected. No color conversion needed." -ForegroundColor Green
-            $abav1Args += @(
-                "--enc", "colorprim=bt709",
-                "--enc", "transfer=bt709",
-                "--enc", "colormatrix=bt709"
-            )
+            "--enc", "x265-params=colorprim=bt709:transfer=bt709:colormatrix=bt709:range=$($colorRange):min-keyint=$($minKeyint):keyint=$($keyint):$($baseX265Params)"
         }
-        "bt2020-pq" {
+        "bt2020-pq" { 
             Write-Host "HDR10 content detected."
-            $abav1Args += @(
-                "--enc", "colorprim=bt2020",
-                "--enc", "transfer=smpte2084",
-                "--enc", "colormatrix=bt2020nc",
-                "--enc", "hdr-opt=1",
-                "--enc", "max-cll=1000,400"
-            )
+            "--enc", "x265-params=colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:range=$($colorRange):min-keyint=$($minKeyint):keyint=$($keyint):hdr-opt=1:max-cll=1000,400:$($baseX265Params)"
         }
-        "bt2020-hlg" {
+        "bt2020-hlg" { 
             Write-Host "HLG content detected."
-            $abav1Args += @(
-                "--enc", "colorprim=bt2020",
-                "--enc", "transfer=arib-std-b67",
-                "--enc", "colormatrix=bt2020nc"
-            )
+            "--enc", "x265-params=colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc:range=$($colorRange):min-keyint=$($minKeyint):keyint=$($keyint):$($baseX265Params)"
         }
-        "iphone-dolby-vision" {
-            Write-Host "iPhone Dolby Vision (Profile 8.4) content detected. Converting to HDR10..."
-            $abav1Args += @(
-                "--enc", "colorprim=bt2020",
-                "--enc", "transfer=smpte2084",
-                "--enc", "colormatrix=bt2020nc",
-                "--enc", "hdr-opt=1",
-                "--enc", "max-cll=1000,400",
-                "--enc", "master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
-            )
+        "iphone-dolby-vision" { 
+            Write-Host "iPhone Dolby Vision (Profile 8.4) detected. Converting to HDR10..."
+            "--enc", "x265-params=colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:range=$($colorRange):min-keyint=$($minKeyint):keyint=$($keyint):hdr-opt=1:max-cll=1000,400:master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1):$($baseX265Params)"
         }
     }
 
-    # Add common encoding parameters
-    $abav1Args += @(
-        "--enc", "frame-threads=2",
-        "--enc", "rc-lookahead=60",
-        "--enc", "qcomp=0.7",
-        "--enc", "ref=4",
-        "--enc", "ctu=64",
-        "--enc", "bframes=8",
-        "--enc", "psy-rd=2.00",
-        "--enc", "rdoq-level=1",
-        "--enc", "aq-mode=2",
-        "--enc", "aq-strength=1.0",
-        "--enc", "no-cutree=1",
-        "--enc", "min-keyint=$minKeyint",
-        "--enc", "keyint=$keyint",
-        "--enc", "tu-inter-depth=4",
-        "--enc", "tu-intra-depth=4",
-        "--enc", "limit-tu=3",
-        "--enc", "no-strong-intra-smoothing=1",
-        "--enc", "sao=1",
-        "--enc", "selective-sao=2",
-        "--enc", "no-sao-non-deblock=1",
-        "--enc", "no-early-skip=1",
-        "--enc", "hist-scenecut=1",
-        "--enc", "range=$colorRange"
-    )
+    # Добавляем параметры к основной команде
+    $abav1Args += $x265Params
+    $abav1Args += @("--acodec", "copy")
 
     # Execute ab-av1 command
     try {
